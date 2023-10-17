@@ -44,3 +44,7 @@ const BigInt = big_math.int.Const;
 const BigIntMut = big_math.int.Mutable;
 const single_allocation_buffer = @import("single_allocation_buffer.zig");
 ```
+
+## Licensing
+
+Everything in this repository is released to the public domain under the [Creative Commons Zero v1.0 Universal License](https://creativecommons.org/publicdomain/zero/1.0/)

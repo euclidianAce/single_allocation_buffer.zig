@@ -1,4 +1,14 @@
-/// Single allocation buffer: Effectively just a slice with some methods to resize with a given (or stored) allocator
+// single_allocation_buffer.zig - Effectively just a slice with some methods to resize with a given (or stored) allocator
+//
+// 2023 - Corey Williamson <euclidianAce@protonmail.com>
+//
+// To the extent possible under law, the author(s) have dedicated all copyright
+// and related and neighboring rights to this software to the public domain
+// worldwide. This software is distributed without any warranty.
+//
+// You should have received a copy of the CC0 Public Domain Dedication along
+// with this software. If not, see <http://creativecommons.org/publicdomain/zero/1.0/>.
+
 pub const Unmanaged = struct {
     slice: ?[]u8 = null,
 
