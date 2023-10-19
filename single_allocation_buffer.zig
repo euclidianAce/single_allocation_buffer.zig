@@ -192,7 +192,9 @@ pub const Unmanaged = struct {
             //    2. Possibly allow the underlying allocator to reuse memory,
             //       since we called `free` first. (Which `realloc` is not able to
             //       do since it needs to memcpy)
-            if (!allocator.resize(slice, len_to_alloc)) {
+            if (allocator.resize(slice, len_to_alloc)) {
+                self.slice.?.len = len_to_alloc;
+            } else {
                 allocator.free(slice);
                 errdefer self.slice = null;
                 self.slice = try allocator.alloc(u8, len_to_alloc);
