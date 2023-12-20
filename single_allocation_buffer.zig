@@ -71,95 +71,6 @@ pub const Unmanaged = struct {
 
     // end std.mem.Allocator functions
 
-    pub fn allocBatch(
-        self: *@This(),
-        allocator: Allocator,
-        comptime T: type,
-        lengths: LengthStruct(T, .ignore),
-    ) Allocator.Error!T {
-        return self.allocBatchAdvanced(allocator, T, .ignore, lengths);
-    }
-
-    pub fn allocBatchStrict(
-        self: *@This(),
-        allocator: Allocator,
-        comptime T: type,
-        lengths: LengthStruct(T, .@"error"),
-    ) Allocator.Error!T {
-        return self.allocBatchAdvanced(allocator, T, .@"error", lengths);
-    }
-
-    pub fn allocBatchAdvanced(
-        self: *@This(),
-        allocator: Allocator,
-        comptime T: type,
-        comptime non_pointer_field_behavior: NonPointerFieldBehavior,
-        lengths: LengthStruct(T, non_pointer_field_behavior),
-    ) Allocator.Error!T {
-        // LengthStruct will already assert that T is a struct
-        const fields = @typeInfo(T).Struct.fields;
-        const Field = struct {
-            index: usize,
-            alignment: usize,
-            size: usize,
-        };
-
-        const sorted_fields: [fields.len]Field = comptime blk: {
-            var sorted_fields: [fields.len]Field = undefined;
-            for (&sorted_fields, fields, 0..) |*s_field, field, index|
-                s_field.* = .{
-                    .index = index,
-                    .alignment = if (@sizeOf(field.type) == 0) 1 else @alignOf(field.type),
-                    .size = @sizeOf(field.type),
-                };
-            std.mem.sort(
-                Field,
-                &sorted_fields,
-                {},
-                struct {
-                    pub fn lt(_: void, lhs: Field, rhs: Field) bool {
-                        if (lhs.alignment == rhs.alignment)
-                            return lhs.index < rhs.index;
-                        return lhs.alignment < rhs.alignment;
-                    }
-                }.lt,
-            );
-            break :blk sorted_fields;
-        };
-
-        var total_size: usize = 0;
-        const alignment = sorted_fields[0].alignment;
-        var offsets: [fields.len]usize = undefined;
-
-        inline for (sorted_fields) |field| {
-            const name = fields[field.index].name;
-            const element_count = if (@hasField(@TypeOf(lengths), name)) @field(lengths, name) else 1;
-
-            // first align up the size to the alignment of the current field
-            total_size = std.mem.alignForward(usize, total_size, field.alignment);
-
-            // save the offset into the block of memory
-            offsets[field.index] = total_size;
-
-            // then add the length of all the elements
-            total_size += field.size * element_count;
-        }
-
-        var bytes_ptr = try self.ensureAlignedSubslice(allocator, total_size, alignment);
-
-        var result: T = undefined;
-        inline for (offsets, fields) |offset, field| {
-            const Child = @typeInfo(field.type).Pointer.child;
-            var field_ptr = @as([*]align(field.alignment) Child, @ptrCast(@alignCast(bytes_ptr + offset)));
-            @field(result, field.name) = switch (@typeInfo(field.type).Pointer.size) {
-                .One => &field_ptr[0],
-                .Many, .C => field_ptr,
-                .Slice => field_ptr[0..@field(lengths, field.name)],
-            };
-        }
-        return result;
-    }
-
     // Resizes or reallocates the slice so there exists a subslice of the given
     // length that is aligned to the given alignment.
     //
@@ -217,57 +128,6 @@ pub const Unmanaged = struct {
         const offset = std.mem.alignPointerOffset(slice.ptr, needed_alignment).?;
         std.debug.assert(slice.len - offset >= needed_byte_len);
         return slice.ptr + offset;
-    }
-
-    test "allocBatch" {
-        var buf = @This(){};
-        defer buf.deinit(std.testing.allocator);
-
-        const MyStruct = struct { a: i16, b: u8 };
-
-        const result = try buf.allocBatch(
-            std.testing.allocator,
-            struct {
-                x: []usize,
-                b: *u8,
-                s: []MyStruct,
-            },
-            .{
-                .x = 10,
-                .s = 12,
-            },
-        );
-
-        try std.testing.expectEqual(
-            @as(usize, 10),
-            result.x.len,
-        );
-
-        try std.testing.expectEqual(
-            @as(usize, 12),
-            result.s.len,
-        );
-
-        // shouldnt clobber each other
-        @memset(result.s, .{ .a = 100, .b = 7 });
-        @memset(result.x, std.math.maxInt(usize));
-        result.b.* = 32;
-
-        for (result.s) |s| {
-            try std.testing.expectEqual(
-                @as(@TypeOf(s.a), 100),
-                s.a,
-            );
-            try std.testing.expectEqual(
-                @as(@TypeOf(s.b), 7),
-                s.b,
-            );
-        }
-
-        for (result.x) |x|
-            try std.testing.expectEqual(@as(usize, std.math.maxInt(usize)), x);
-
-        try std.testing.expectEqual(@as(u8, 32), result.b.*);
     }
 
     test "basic (unaligned byte) allocations" {
@@ -341,31 +201,6 @@ pub const Managed = struct {
         return self.unmanaged.dupeZ(self.allocator, T, src);
     }
 
-    pub fn allocBatch(
-        self: *@This(),
-        comptime T: type,
-        lengths: LengthStruct(T, .ignore),
-    ) Allocator.Error!T {
-        return self.unmanaged.allocBatch(self.allocator, T, lengths);
-    }
-
-    pub fn allocBatchStrict(
-        self: *@This(),
-        comptime T: type,
-        lengths: LengthStruct(T, .@"error"),
-    ) Allocator.Error!T {
-        return self.unmanaged.allocBatchAdvanced(self.allocator, T, .@"error", lengths);
-    }
-
-    pub fn allocBatchAdvanced(
-        self: *@This(),
-        comptime T: type,
-        comptime non_pointer_field_behavior: NonPointerFieldBehavior,
-        lengths: LengthStruct(T, non_pointer_field_behavior),
-    ) Allocator.Error!T {
-        return self.unmanaged.allocBatchAdvanced(self.allocator, T, non_pointer_field_behavior, lengths);
-    }
-
     // ensure we have the same methods
     comptime {
         const unmanaged_decls = @typeInfo(Unmanaged).Struct.decls;
@@ -377,58 +212,6 @@ pub const Managed = struct {
         }
     }
 };
-
-pub const NonPointerFieldBehavior = enum {
-    ignore,
-    @"error",
-};
-
-// Takes a struct type S and returns a struct of usize fields corresponding to
-// each (non-single) pointer field of S
-pub fn LengthStruct(
-    comptime S: type,
-    comptime non_pointer_field_behavior: NonPointerFieldBehavior,
-) type {
-    const info = switch (@typeInfo(S)) {
-        .Struct => |info| info,
-        else => @compileError("Expected a struct type, got " ++ @typeName(S)),
-    };
-
-    // for each field of S
-    //  - If it isn't a pointer type, either error out or ignore it according
-    //    to non_pointer_field_behavior. (Either way, control flow diverges from
-    //    here)
-    //  - If that pointer has a length, add a length field to the result struct
-    var length_fields: [info.fields.len]std.builtin.Type.StructField = undefined;
-    var i: usize = 0;
-    for (info.fields) |base_field| {
-        const field_info = switch (@typeInfo(base_field.type)) {
-            .Pointer => |p_info| p_info,
-            else => switch (non_pointer_field_behavior) {
-                .ignore => continue,
-                .@"error" => @compileError("Field " ++ base_field.name ++ " (of type " ++ @typeName(S) ++ ") is not a pointer type"),
-            },
-        };
-
-        if (field_info.size != .One) {
-            length_fields[i] = .{
-                .name = base_field.name,
-                .type = usize,
-                .default_value = null,
-                .is_comptime = false,
-                .alignment = @alignOf(usize),
-            };
-            i += 1;
-        }
-    }
-
-    return @Type(.{ .Struct = .{
-        .layout = .Auto,
-        .fields = length_fields[0..i],
-        .decls = &.{},
-        .is_tuple = false,
-    } });
-}
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
