@@ -27,6 +27,18 @@ pub const Unmanaged = struct {
         self.buffer_lock.unlock();
     }
 
+    pub fn runtimeAlignedAlloc(
+        self: *@This(),
+        allocator: Allocator,
+        comptime T: type,
+        alignment: ?u32,
+        len: usize,
+    ) Allocator.Error![]T {
+        const result = self.runtimeAlignedAllocTemporary(allocator, T, alignment, len);
+        self.lockBuffer();
+        return result;
+    }
+
     // begin std.mem.Allocator functions
 
     pub fn alignedAlloc(
@@ -82,6 +94,17 @@ pub const Unmanaged = struct {
     //   big_int.sqrt(other, try buf.allocTempoary(Limb, calcSqrtLimbsBufferLen(other.bitCountAbs())))
     //
 
+    pub fn runtimeAlignedAllocTemporary(
+        self: *@This(),
+        allocator: Allocator,
+        comptime T: type,
+        alignment: ?u32,
+        len: usize,
+    ) Allocator.Error![]T {
+        const slice = try self.ensureAlignedSubslice(allocator, @sizeOf(T) * len, alignment orelse @alignOf(T));
+        return @as([*]T, @ptrCast(@alignCast(slice)))[0..len];
+    }
+
     pub fn alignedAllocTemporary(
         self: *@This(),
         allocator: Allocator,
@@ -90,11 +113,7 @@ pub const Unmanaged = struct {
         comptime alignment: ?u32,
         len: usize,
     ) Allocator.Error![]align(alignment orelse @alignOf(T)) T {
-        const ptr = try self.ensureAlignedSubslice(allocator, @sizeOf(T) * len, alignment orelse @alignOf(T));
-        return @as(
-            [*]align(alignment orelse @alignOf(T)) T,
-            @ptrCast(@alignCast(ptr)),
-        )[0..len];
+        return @alignCast(try self.runtimeAlignedAllocTemporary(allocator, T, alignment, len));
     }
 
     pub fn allocTemporary(self: *@This(), allocator: Allocator, comptime T: type, len: usize) Allocator.Error![]T {
@@ -179,8 +198,7 @@ pub const Unmanaged = struct {
         return self.getAlignedSubslice(needed_byte_len, needed_alignment).?;
     }
 
-    // asserts that an aligned subslice exists
-    fn getAlignedSubslice(
+    pub fn getAlignedSubslice(
         self: @This(),
         needed_byte_len: usize,
         needed_alignment: u32,
@@ -190,6 +208,14 @@ pub const Unmanaged = struct {
         if (slice.len - offset < needed_byte_len)
             return null;
         return slice.ptr + offset;
+    }
+
+    comptime { // ensure every *Temporary has a corresponding non-temporary
+        const decls = @typeInfo(Unmanaged).Struct.decls;
+        for (decls) |decl| {
+            if (std.mem.endsWith(u8, decl.name, "Temporary") and !@hasDecl(Unmanaged, decl.name[0 .. decl.name.len - "Temporary".len]))
+                @compileError("Unmanaged is missing non-temporary version of " ++ decl.name);
+        }
     }
 
     test "basic (unaligned byte) allocations" {
@@ -273,6 +299,10 @@ pub const Managed = struct {
         return self.unmanaged.dupeZ(self.allocator, T, src);
     }
 
+    pub fn runtimeAlignedAllocTemporary(self: *@This(), comptime T: type, alignment: ?u32, len: usize) Allocator.Error![]T {
+        return self.unmanaged.runtimeAlignedAllocTemporary(T, alignment, len);
+    }
+
     pub fn alignedAllocTemporary(
         self: *@This(),
         comptime T: type,
@@ -284,7 +314,7 @@ pub const Managed = struct {
     }
 
     pub fn allocTemporary(self: *@This(), comptime T: type, len: usize) Allocator.Error![]T {
-        return self.unmanaged.allocTemporary(self.allocator, T, null, len);
+        return self.unmanaged.allocTemporary(self.allocator, T, len);
     }
 
     pub fn allocSentinelTemporary(
@@ -308,6 +338,14 @@ pub const Managed = struct {
         return self.unmanaged.dupeZTemporary(self.allocator, T, src);
     }
 
+    pub fn getAlignedSubslice(
+        self: @This(),
+        needed_byte_len: usize,
+        needed_alignment: u32,
+    ) ?[*]u8 {
+        return self.unmanaged.getAlignedSubslice(needed_byte_len, needed_alignment);
+    }
+
     // ensure we have the same methods
     comptime {
         const unmanaged_decls = @typeInfo(Unmanaged).Struct.decls;
@@ -326,4 +364,7 @@ const Allocator = std.mem.Allocator;
 test {
     _ = Unmanaged;
     _ = Managed;
+
+    std.testing.refAllDecls(Unmanaged);
+    std.testing.refAllDecls(Managed);
 }
