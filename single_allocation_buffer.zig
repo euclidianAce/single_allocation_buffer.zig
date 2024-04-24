@@ -264,6 +264,52 @@ pub const Managed = struct {
         self.unmanaged.buffer_lock.unlock();
     }
 
+    // Note: this is just to satisfy the standard allocator interface, you
+    // should verify that the consumer of it only allocates in a way compatible
+    // with this: i.e. owners of allocations should still call unlockBuffer
+    // when they are done with allocations
+    pub fn asUncheckedAllocator(self: *Managed) Allocator {
+        const ops = struct {
+            pub fn alloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
+                _ = ret_addr;
+                const s: *Managed = @alignCast(@ptrCast(ctx));
+                const slice = s.unmanaged.runtimeAlignedAlloc(
+                    s.allocator,
+                    u8,
+                    @as(u32, 1) << @intCast(ptr_align),
+                    len,
+                ) catch return null;
+                return slice.ptr;
+            }
+
+            pub fn resize(ctx: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, _: usize) bool {
+                const s: *Managed = @alignCast(@ptrCast(ctx));
+                const ptr = s.unmanaged.getAlignedSubslice(
+                    new_len,
+                    @as(u32, 1) << @intCast(buf_align),
+                ) orelse return false;
+                return ptr == buf.ptr;
+            }
+
+            pub fn free(ctx: *anyopaque, _: []u8, _: u8, _: usize) void {
+                const s: *Managed = @alignCast(@ptrCast(ctx));
+                s.unlockBuffer();
+            }
+        };
+
+        const vtable: Allocator.VTable = .{
+            .alloc = ops.alloc,
+            .resize = ops.resize,
+            .free = ops.free,
+        };
+
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    pub fn runtimeAlignedAlloc(self: *@This(), comptime T: type, alignment: ?u32, len: usize) Allocator.Error![]T {
+        return self.unmanaged.runtimeAlignedAlloc(T, alignment, len);
+    }
+
     pub fn alignedAlloc(
         self: *@This(),
         comptime T: type,
@@ -355,6 +401,18 @@ pub const Managed = struct {
                 @compileError("single_allocation_buffer.Managed is missing declaration " ++ decl.name);
             }
         }
+    }
+
+    test "usage as standard allocator" {
+        var buf = Managed.init(std.testing.allocator);
+        defer buf.deinit();
+
+        const ator = buf.asUncheckedAllocator();
+        _ = try ator.alloc(u8, 100);
+        buf.unlockBuffer();
+
+        _ = try ator.alloc(u8, 100);
+        buf.unlockBuffer();
     }
 };
 
