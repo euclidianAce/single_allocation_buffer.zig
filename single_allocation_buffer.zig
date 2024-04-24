@@ -28,7 +28,7 @@ pub const Unmanaged = struct {
         comptime alignment: ?u29,
         len: usize,
     ) Allocator.Error![]align(alignment orelse @alignOf(T)) T {
-        var ptr = try self.ensureAlignedSubslice(allocator, @sizeOf(T) * len, alignment orelse @alignOf(T));
+        const ptr = try self.ensureAlignedSubslice(allocator, @sizeOf(T) * len, alignment orelse @alignOf(T));
         return @as(
             [*]align(alignment orelse @alignOf(T)) T,
             @ptrCast(@alignCast(ptr)),
@@ -57,7 +57,7 @@ pub const Unmanaged = struct {
     }
 
     pub fn dupe(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) Allocator.Error![]T {
-        var dest = try self.alloc(allocator, T, src.len);
+        const dest = try self.alloc(allocator, T, src.len);
         @memcpy(dest, src);
         return dest;
     }
@@ -134,10 +134,10 @@ pub const Unmanaged = struct {
         var buf = @This(){};
         defer buf.deinit(std.testing.allocator);
 
-        var slice = try buf.alloc(std.testing.allocator, u8, 123);
+        const slice = try buf.alloc(std.testing.allocator, u8, 123);
         @memset(slice, 0xfe);
 
-        var other_slice = try buf.alloc(std.testing.allocator, u8, 32);
+        const other_slice = try buf.alloc(std.testing.allocator, u8, 32);
         for (other_slice) |item|
             try std.testing.expectEqual(@as(u8, 0xfe), item);
     }
@@ -148,7 +148,7 @@ pub const Unmanaged = struct {
 
         inline for (0..8) |alignment_exp| {
             const alignment = 1 << alignment_exp;
-            var slice = try buf.alignedAlloc(std.testing.allocator, u8, alignment, 4);
+            const slice = try buf.alignedAlloc(std.testing.allocator, u8, alignment, 4);
             try std.testing.expect(std.mem.isAligned(@intFromPtr(slice.ptr), alignment));
         }
     }
