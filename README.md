@@ -23,16 +23,24 @@ pub fn main() !void {
     var a = BigIntMut.init(limbs[0..16], 12345_67890_12345_67890);
     const b = BigIntMut.init(limbs[17..], 67890_12345_67890_12345).toConst();
 
-    a.mul(
-        a.toConst(),
-        b,
-        try sab.alloc(big_math.Limb, big_math.int.calcMulLimbsBufferLen(a.len, b.limbs.len, 2)),
-        null,
-    );
+    {
+        a.mul(
+            a.toConst(),
+            b,
+            try sab.alloc(big_math.Limb, big_math.int.calcMulLimbsBufferLen(a.len, b.limbs.len, 2)),
+            null,
+        );
+
+        // uses a safety lock to track when allocations are live,
+        // use unlockBuffer to say the buffer is unused
+        sab.unlockBuffer();
+    }
+
+    // or use the *Temporary functions to allocate without taking the lock
 
     a.sqrt(
         a.toConst(),
-        try sab.alloc(big_math.Limb, big_math.int.calcSqrtLimbsBufferLen(a.toConst().bitCountAbs())),
+        try sab.allocTemporary(big_math.Limb, big_math.int.calcSqrtLimbsBufferLen(a.toConst().bitCountAbs())),
     );
 
     std.log.info("{}", .{a.toConst()});

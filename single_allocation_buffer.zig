@@ -11,11 +11,20 @@
 
 pub const Unmanaged = struct {
     slice: ?[]u8 = null,
+    buffer_lock: std.debug.SafetyLock = .{},
 
     pub fn deinit(self: *@This(), allocator: Allocator) void {
+        self.buffer_lock.assertUnlocked();
         if (self.slice) |s|
             allocator.free(s);
         self.* = .{};
+    }
+
+    pub fn lockBuffer(self: *@This()) void {
+        self.buffer_lock.lock();
+    }
+    pub fn unlockBuffer(self: *@This()) void {
+        self.buffer_lock.unlock();
     }
 
     // begin std.mem.Allocator functions
@@ -25,7 +34,60 @@ pub const Unmanaged = struct {
         allocator: Allocator,
         comptime T: type,
         /// null means naturally aligned
-        comptime alignment: ?u29,
+        comptime alignment: ?u32,
+        len: usize,
+    ) Allocator.Error![]align(alignment orelse @alignOf(T)) T {
+        const result = self.alignedAllocTemporary(allocator, T, alignment, len);
+        self.lockBuffer();
+        return result;
+    }
+
+    pub fn alloc(self: *@This(), allocator: Allocator, comptime T: type, len: usize) Allocator.Error![]T {
+        const result = self.allocTemporary(allocator, T, len);
+        self.lockBuffer();
+        return result;
+    }
+
+    pub fn allocSentinel(self: *@This(), allocator: Allocator, comptime T: type, len: usize, comptime sentinel: T) Allocator.Error![:sentinel]T {
+        const result = self.allocSentinelTemporary(allocator, T, len, sentinel);
+        self.lockBuffer();
+        return result;
+    }
+
+    pub fn create(self: *@This(), allocator: Allocator, comptime T: type) Allocator.Error!*T {
+        const result = self.createTemporary(allocator, T);
+        self.lockBuffer();
+        return result;
+    }
+
+    pub fn dupe(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) Allocator.Error![]T {
+        const result = self.dupeTemporary(allocator, T, src);
+        self.lockBuffer();
+        return result;
+    }
+
+    pub fn dupeZ(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) ![:0]T {
+        const result = self.dupeZTemporary(allocator, T, src);
+        self.lockBuffer();
+        return result;
+    }
+
+    // end std.mem.Allocator functions
+
+    // The *Temporary functions allocate without locking the buffer lock
+    // Use these when functions expect buffers as arguments like big int arithmetic
+    //
+    // e.g.
+    //
+    //   big_int.sqrt(other, try buf.allocTempoary(Limb, calcSqrtLimbsBufferLen(other.bitCountAbs())))
+    //
+
+    pub fn alignedAllocTemporary(
+        self: *@This(),
+        allocator: Allocator,
+        comptime T: type,
+        /// null means naturally aligned
+        comptime alignment: ?u32,
         len: usize,
     ) Allocator.Error![]align(alignment orelse @alignOf(T)) T {
         const ptr = try self.ensureAlignedSubslice(allocator, @sizeOf(T) * len, alignment orelse @alignOf(T));
@@ -35,41 +97,39 @@ pub const Unmanaged = struct {
         )[0..len];
     }
 
-    pub fn alloc(self: *@This(), allocator: Allocator, comptime T: type, len: usize) Allocator.Error![]T {
-        return self.alignedAlloc(allocator, T, null, len);
+    pub fn allocTemporary(self: *@This(), allocator: Allocator, comptime T: type, len: usize) Allocator.Error![]T {
+        return self.alignedAllocTemporary(allocator, T, null, len);
     }
 
-    pub fn allocSentinel(
+    pub fn allocSentinelTemporary(
         self: *@This(),
         allocator: Allocator,
         comptime T: type,
         len: usize,
         comptime sentinel: T,
     ) Allocator.Error![:sentinel]T {
-        var slice = try self.alloc(allocator, T, len + 1);
+        var slice = try self.allocTemporary(allocator, T, len + 1);
         slice[len] = sentinel;
         return slice[0..len :sentinel];
     }
 
-    pub fn create(self: *@This(), allocator: Allocator, comptime T: type) Allocator.Error!*T {
-        var s = try self.alloc(allocator, T, 1);
+    pub fn createTemporary(self: *@This(), allocator: Allocator, comptime T: type) Allocator.Error!*T {
+        var s = try self.allocTemporary(allocator, T, 1);
         return &s[0];
     }
 
-    pub fn dupe(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) Allocator.Error![]T {
-        const dest = try self.alloc(allocator, T, src.len);
+    pub fn dupeTemporary(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) Allocator.Error![]T {
+        const dest = try self.allocTemporary(allocator, T, src.len);
         @memcpy(dest, src);
         return dest;
     }
 
-    pub fn dupeZ(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) ![:0]T {
-        const new_buf = try self.alloc(allocator, T, src.len + 1);
+    pub fn dupeZTemporary(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) ![:0]T {
+        const new_buf = try self.allocTemporary(allocator, T, src.len + 1);
         @memcpy(new_buf[0..src.len], src);
         new_buf[src.len] = 0;
         return new_buf[0..src.len :0];
     }
-
-    // end std.mem.Allocator functions
 
     // Resizes or reallocates the slice so there exists a subslice of the given
     // length that is aligned to the given alignment.
@@ -79,17 +139,18 @@ pub const Unmanaged = struct {
         self: *@This(),
         allocator: Allocator,
         needed_byte_len: usize,
-        needed_alignment: u29,
+        needed_alignment: u32,
     ) Allocator.Error![*]u8 {
         std.debug.assert(needed_alignment > 0);
+        self.buffer_lock.assertUnlocked();
+
         const len_to_alloc = std.math.add(usize, needed_byte_len, needed_alignment - 1) catch return Allocator.Error.OutOfMemory;
 
         if (self.slice) |slice| {
             slice_can_be_aligned: {
                 const offset = std.mem.alignPointerOffset(slice.ptr, needed_alignment) orelse break :slice_can_be_aligned;
-                if (slice.len - offset >= needed_byte_len) {
-                    return self.getAlignedSubslice(needed_byte_len, needed_alignment);
-                }
+                if (slice.len - offset >= needed_byte_len)
+                    return self.getAlignedSubslice(needed_byte_len, needed_alignment).?;
             }
 
             // Length is too short (either because we are aligned and don't have enough
@@ -115,18 +176,19 @@ pub const Unmanaged = struct {
             self.slice = try allocator.alloc(u8, len_to_alloc);
         }
 
-        return self.getAlignedSubslice(needed_byte_len, needed_alignment);
+        return self.getAlignedSubslice(needed_byte_len, needed_alignment).?;
     }
 
     // asserts that an aligned subslice exists
     fn getAlignedSubslice(
         self: @This(),
         needed_byte_len: usize,
-        needed_alignment: u29,
-    ) [*]u8 {
+        needed_alignment: u32,
+    ) ?[*]u8 {
         const slice = self.slice.?;
         const offset = std.mem.alignPointerOffset(slice.ptr, needed_alignment).?;
-        std.debug.assert(slice.len - offset >= needed_byte_len);
+        if (slice.len - offset < needed_byte_len)
+            return null;
         return slice.ptr + offset;
     }
 
@@ -136,8 +198,10 @@ pub const Unmanaged = struct {
 
         const slice = try buf.alloc(std.testing.allocator, u8, 123);
         @memset(slice, 0xfe);
+        buf.unlockBuffer();
 
         const other_slice = try buf.alloc(std.testing.allocator, u8, 32);
+        defer buf.unlockBuffer();
         for (other_slice) |item|
             try std.testing.expectEqual(@as(u8, 0xfe), item);
     }
@@ -149,6 +213,7 @@ pub const Unmanaged = struct {
         inline for (0..8) |alignment_exp| {
             const alignment = 1 << alignment_exp;
             const slice = try buf.alignedAlloc(std.testing.allocator, u8, alignment, 4);
+            defer buf.unlockBuffer();
             try std.testing.expect(std.mem.isAligned(@intFromPtr(slice.ptr), alignment));
         }
     }
@@ -166,11 +231,18 @@ pub const Managed = struct {
         self.unmanaged.deinit(self.allocator);
     }
 
+    pub fn lockBuffer(self: *@This()) void {
+        self.unmanaged.buffer_lock.lock();
+    }
+    pub fn unlockBuffer(self: *@This()) void {
+        self.unmanaged.buffer_lock.unlock();
+    }
+
     pub fn alignedAlloc(
         self: *@This(),
         comptime T: type,
         /// null means naturally aligned
-        comptime alignment: ?u29,
+        comptime alignment: ?u32,
         len: usize,
     ) Allocator.Error![]align(alignment orelse @alignOf(T)) T {
         return self.unmanaged.alignedAlloc(self.allocator, T, alignment, len);
@@ -199,6 +271,41 @@ pub const Managed = struct {
 
     pub fn dupeZ(self: *@This(), comptime T: type, src: []const T) ![:0]T {
         return self.unmanaged.dupeZ(self.allocator, T, src);
+    }
+
+    pub fn alignedAllocTemporary(
+        self: *@This(),
+        comptime T: type,
+        /// null means naturally aligned
+        comptime alignment: ?u32,
+        len: usize,
+    ) Allocator.Error![]align(alignment orelse @alignOf(T)) T {
+        return self.unmanaged.alignedAllocTemporary(self.allocator, T, alignment, len);
+    }
+
+    pub fn allocTemporary(self: *@This(), comptime T: type, len: usize) Allocator.Error![]T {
+        return self.unmanaged.allocTemporary(self.allocator, T, null, len);
+    }
+
+    pub fn allocSentinelTemporary(
+        self: *@This(),
+        comptime T: type,
+        len: usize,
+        comptime sentinel: T,
+    ) Allocator.Error![:sentinel]T {
+        return self.unmanaged.allocSentinelTemporary(self.allocator, T, len, sentinel);
+    }
+
+    pub fn createTemporary(self: *@This(), comptime T: type) Allocator.Error!*T {
+        return self.unmanaged.createTemporary(self.allocator, T);
+    }
+
+    pub fn dupeTemporary(self: *@This(), comptime T: type, src: []const T) Allocator.Error![]T {
+        return self.unmanaged.dupeTemporary(self.allocator, T, src);
+    }
+
+    pub fn dupeZTemporary(self: *@This(), comptime T: type, src: []const T) ![:0]T {
+        return self.unmanaged.dupeZTemporary(self.allocator, T, src);
     }
 
     // ensure we have the same methods
