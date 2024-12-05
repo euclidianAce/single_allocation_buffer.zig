@@ -150,6 +150,50 @@ pub const Unmanaged = struct {
         return new_buf[0..src.len :0];
     }
 
+    pub fn print(
+        self: *@This(),
+        allocator: Allocator,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) Allocator.Error![]u8 {
+        const count = std.fmt.count(fmt, args);
+        const buf = try self.alloc(allocator, u8, count);
+        return std.fmt.bufPrint(buf, fmt, args) catch unreachable;
+    }
+
+    pub fn printTemporary(
+        self: *@This(),
+        allocator: Allocator,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) Allocator.Error![]u8 {
+        const count = std.fmt.count(fmt, args);
+        const buf = try self.allocTemporary(allocator, u8, count);
+        return std.fmt.bufPrint(buf, fmt, args) catch unreachable;
+    }
+
+    pub fn printZ(
+        self: *@This(),
+        allocator: Allocator,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) Allocator.Error![:0]u8 {
+        const count = std.fmt.count(fmt, args);
+        const buf = try self.alloc(allocator, u8, count + 1);
+        return std.fmt.bufPrintZ(buf, fmt, args) catch unreachable;
+    }
+
+    pub fn printZTemporary(
+        self: *@This(),
+        allocator: Allocator,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) Allocator.Error![:0]u8 {
+        const count = std.fmt.count(fmt, args);
+        const buf = try self.allocTemporary(allocator, u8, count + 1);
+        return std.fmt.bufPrintZ(buf, fmt, args) catch unreachable;
+    }
+
     // Resizes or reallocates the slice so there exists a subslice of the given
     // length that is aligned to the given alignment.
     //
@@ -390,6 +434,38 @@ pub const Managed = struct {
         needed_alignment: u32,
     ) ?[*]u8 {
         return self.unmanaged.getAlignedSubslice(needed_byte_len, needed_alignment);
+    }
+
+    pub fn print(
+        self: *@This(),
+        comptime fmt: []const u8,
+        args: anytype,
+    ) Allocator.Error![]u8 {
+        return self.unmanaged.print(self.allocator, fmt, args);
+    }
+
+    pub fn printZ(
+        self: *@This(),
+        comptime fmt: []const u8,
+        args: anytype,
+    ) Allocator.Error![:0]u8 {
+        return self.unmanaged.printZ(self.allocator, fmt, args);
+    }
+
+    pub fn printTemporary(
+        self: *@This(),
+        comptime fmt: []const u8,
+        args: anytype,
+    ) Allocator.Error![]u8 {
+        return self.unmanaged.printTemporary(self.allocator, fmt, args);
+    }
+
+    pub fn printZTemporary(
+        self: *@This(),
+        comptime fmt: []const u8,
+        args: anytype,
+    ) Allocator.Error![:0]u8 {
+        return self.unmanaged.printZTemporary(self.allocator, fmt, args);
     }
 
     // ensure we have the same methods
