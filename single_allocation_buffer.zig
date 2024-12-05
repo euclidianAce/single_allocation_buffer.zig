@@ -1,5 +1,7 @@
-// single_allocation_buffer.zig - Effectively just a slice with some methods to resize with a given (or stored) allocator
-//
+//! single_allocation_buffer.zig
+//!
+//! Effectively just a slice with some methods to resize with a given (or stored) allocator
+
 // 2023 - Corey Williamson <euclidianAce@protonmail.com>
 //
 // To the extent possible under law, the author(s) have dedicated all copyright
@@ -10,9 +12,36 @@
 // with this software. If not, see <http://creativecommons.org/publicdomain/zero/1.0/>.
 
 pub const Unmanaged = struct {
+    //! The Unmanaged variant. Any functions that allocate will need an
+    //! allocator passed as an argument.
+    //!
+    //! Best used when this is a struct member along side other dynamically
+    //! allocated data that share an allocator.
+    //!
+    //! Otherwise see the `Managed` variant
+
+    /// The backing memory for _all_ allocations this buffer will provide
     slice: ?[]u8 = null,
+
+    /// In Safe modes, any allocation functions will assert that this lock is
+    /// not held to ensure that data still in use is not clobbered
+    ///
+    /// Each allocating function has a dual “Temporary” function. The
+    /// “Temporary” functions will allocate memory without taking the lock for
+    /// convenience when passing an allocated buffer to a function that doesn't
+    /// take ownership of it. e.g. Big integer arithmetic:
+    ///
+    /// ```
+    /// big_int.sqrt(other, try buf.allocTempoary(Limb, calcSqrtLimbsBufferLen(other.bitCountAbs())))
+    /// ```
+    ///
+    /// This should not be interacted with directly, but instead through the
+    /// `lockBuffer` and `unlockBuffer` methods
     buffer_lock: std.debug.SafetyLock = .{},
 
+    /// Deallocates the allocated buffer
+    ///
+    /// In Safe modes, asserts that the lock is unlocked
     pub fn deinit(self: *@This(), allocator: Allocator) void {
         self.buffer_lock.assertUnlocked();
         if (self.slice) |s|
@@ -20,13 +49,21 @@ pub const Unmanaged = struct {
         self.* = .{};
     }
 
+    /// Locks `buffer_lock`
     pub fn lockBuffer(self: *@This()) void {
         self.buffer_lock.lock();
     }
+
+    /// Unlocks `buffer_lock`
     pub fn unlockBuffer(self: *@This()) void {
         self.buffer_lock.unlock();
     }
 
+    /// Allocates a slice with an alignment that is runtime known
+    ///
+    /// Locks the buffer
+    ///
+    /// Also see `runtimeAlignedAllocTemporary`
     pub fn runtimeAlignedAlloc(
         self: *@This(),
         allocator: Allocator,
@@ -41,6 +78,11 @@ pub const Unmanaged = struct {
 
     // begin std.mem.Allocator functions
 
+    /// Same as the standard library's `Allocator.alignedAlloc`
+    ///
+    /// Locks the buffer
+    ///
+    /// Also see `alignedAllocTemporary`
     pub fn alignedAlloc(
         self: *@This(),
         allocator: Allocator,
@@ -54,30 +96,55 @@ pub const Unmanaged = struct {
         return result;
     }
 
+    /// Same as the standard library's `Allocator.alloc`
+    ///
+    /// Locks the buffer
+    ///
+    /// Also see `allocTemporary`
     pub fn alloc(self: *@This(), allocator: Allocator, comptime T: type, len: usize) Allocator.Error![]T {
-        const result = self.allocTemporary(allocator, T, len);
+        const result = try self.allocTemporary(allocator, T, len);
         self.lockBuffer();
         return result;
     }
 
+    /// Same as the standard library's `Allocator.allocSentinel`
+    ///
+    /// Locks the buffer
+    ///
+    /// Also see `allocSentinelTemporary`
     pub fn allocSentinel(self: *@This(), allocator: Allocator, comptime T: type, len: usize, comptime sentinel: T) Allocator.Error![:sentinel]T {
         const result = try self.allocSentinelTemporary(allocator, T, len, sentinel);
         self.lockBuffer();
         return result;
     }
 
+    /// Same as the standard library's `Allocator.create`
+    ///
+    /// Locks the buffer
+    ///
+    /// Also see `createTemporary`
     pub fn create(self: *@This(), allocator: Allocator, comptime T: type) Allocator.Error!*T {
         const result = try self.createTemporary(allocator, T);
         self.lockBuffer();
         return result;
     }
 
+    /// Same as the standard library's `Allocator.dupe`
+    ///
+    /// Locks the buffer
+    ///
+    /// Also see `dupeTemporary`
     pub fn dupe(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) Allocator.Error![]T {
         const result = try self.dupeTemporary(allocator, T, src);
         self.lockBuffer();
         return result;
     }
 
+    /// Same as the standard library's `Allocator.dupeZ`
+    ///
+    /// Locks the buffer
+    ///
+    /// Also see `dupeZTemporary`
     pub fn dupeZ(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) Allocator.Error![:0]T {
         const result = try self.dupeZTemporary(allocator, T, src);
         self.lockBuffer();
@@ -86,14 +153,11 @@ pub const Unmanaged = struct {
 
     // end std.mem.Allocator functions
 
-    // The *Temporary functions allocate without locking the buffer lock
-    // Use these when functions expect buffers as arguments like big int arithmetic
-    //
-    // e.g.
-    //
-    //   big_int.sqrt(other, try buf.allocTempoary(Limb, calcSqrtLimbsBufferLen(other.bitCountAbs())))
-    //
-
+    /// Same as the standard library's `Allocator.runtimeAlignedAlloc`
+    ///
+    /// Doesn't lock the buffer
+    ///
+    /// Also see `runtimeAlignedAlloc`
     pub fn runtimeAlignedAllocTemporary(
         self: *@This(),
         allocator: Allocator,
@@ -105,6 +169,11 @@ pub const Unmanaged = struct {
         return @as([*]T, @ptrCast(@alignCast(slice)))[0..len];
     }
 
+    /// Same as the standard library's `Allocator.alignedAlloc`
+    ///
+    /// Doesn't lock the buffer
+    ///
+    /// Also see `alignedAlloc`
     pub fn alignedAllocTemporary(
         self: *@This(),
         allocator: Allocator,
@@ -116,10 +185,20 @@ pub const Unmanaged = struct {
         return @alignCast(try self.runtimeAlignedAllocTemporary(allocator, T, alignment, len));
     }
 
+    /// Same as the standard library's `Allocator.alloc`
+    ///
+    /// Doesn't lock the buffer
+    ///
+    /// Also see `alloc`
     pub fn allocTemporary(self: *@This(), allocator: Allocator, comptime T: type, len: usize) Allocator.Error![]T {
         return self.alignedAllocTemporary(allocator, T, null, len);
     }
 
+    /// Same as the standard library's `Allocator.allocSentinel`
+    ///
+    /// Doesn't lock the buffer
+    ///
+    /// Also see `allocSentinel`
     pub fn allocSentinelTemporary(
         self: *@This(),
         allocator: Allocator,
@@ -132,17 +211,32 @@ pub const Unmanaged = struct {
         return slice[0..len :sentinel];
     }
 
+    /// Same as the standard library's `Allocator.create`
+    ///
+    /// Doesn't lock the buffer
+    ///
+    /// Also see `create`
     pub fn createTemporary(self: *@This(), allocator: Allocator, comptime T: type) Allocator.Error!*T {
         var s = try self.allocTemporary(allocator, T, 1);
         return &s[0];
     }
 
+    /// Same as the standard library's `Allocator.dupe`
+    ///
+    /// Doesn't lock the buffer
+    ///
+    /// Also see `dupe`
     pub fn dupeTemporary(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) Allocator.Error![]T {
         const dest = try self.allocTemporary(allocator, T, src.len);
         @memcpy(dest, src);
         return dest;
     }
 
+    /// Same as the standard library's `Allocator.dupeZ`
+    ///
+    /// Doesn't lock the buffer
+    ///
+    /// Also see `dupeZ`
     pub fn dupeZTemporary(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) Allocator.Error![:0]T {
         const new_buf = try self.allocTemporary(allocator, T, src.len + 1);
         @memcpy(new_buf[0..src.len], src);
@@ -150,6 +244,12 @@ pub const Unmanaged = struct {
         return new_buf[0..src.len :0];
     }
 
+    /// Render the given format string into an allocated buffer. Essentially
+    /// the same as `std.fmt.allocPrint`
+    ///
+    /// Locks the buffer
+    ///
+    /// Also see `printTemporary`, `printZ`, `printZTemporary`
     pub fn print(
         self: *@This(),
         allocator: Allocator,
@@ -161,6 +261,12 @@ pub const Unmanaged = struct {
         return std.fmt.bufPrint(buf, fmt, args) catch unreachable;
     }
 
+    /// Render the given format string into an allocated buffer. Essentially
+    /// the same as `std.fmt.allocPrint`
+    ///
+    /// Doesn't lock the buffer
+    ///
+    /// Also see `print`, `printZ`, `printZTemporary`
     pub fn printTemporary(
         self: *@This(),
         allocator: Allocator,
@@ -172,6 +278,12 @@ pub const Unmanaged = struct {
         return std.fmt.bufPrint(buf, fmt, args) catch unreachable;
     }
 
+    /// Render the given format string into a null-terminated allocated buffer.
+    /// Essentially the same as `std.fmt.allocPrintZ`
+    ///
+    /// Locks the buffer
+    ///
+    /// Also see `printZTemporary`, `print`, `printTemporary`
     pub fn printZ(
         self: *@This(),
         allocator: Allocator,
@@ -183,6 +295,12 @@ pub const Unmanaged = struct {
         return std.fmt.bufPrintZ(buf, fmt, args) catch unreachable;
     }
 
+    /// Render the given format string into a null-terminated allocated buffer.
+    /// Essentially the same as `std.fmt.allocPrintZ`
+    ///
+    /// Locks the buffer
+    ///
+    /// Also see `printZ`, `print`, `printTemporary`
     pub fn printZTemporary(
         self: *@This(),
         allocator: Allocator,
@@ -194,10 +312,10 @@ pub const Unmanaged = struct {
         return std.fmt.bufPrintZ(buf, fmt, args) catch unreachable;
     }
 
-    // Resizes or reallocates the slice so there exists a subslice of the given
-    // length that is aligned to the given alignment.
-    //
-    // May invalidate any data within the slice due to reallocation.
+    /// Resizes or reallocates the slice so there exists a subslice of the given
+    /// length that is aligned to the given alignment.
+    ///
+    /// May invalidate any data within the slice due to reallocation.
     fn ensureAlignedSubslice(
         self: *@This(),
         allocator: Allocator,
@@ -242,6 +360,10 @@ pub const Unmanaged = struct {
         return self.getAlignedSubslice(needed_byte_len, needed_alignment).?;
     }
 
+    /// Find a byte slice within the allocated buffer of the given length and
+    /// alignment. This function does not allocate
+    ///
+    /// Doesn't lock the buffer
     pub fn getAlignedSubslice(
         self: @This(),
         needed_byte_len: usize,
@@ -290,6 +412,14 @@ pub const Unmanaged = struct {
 };
 
 pub const Managed = struct {
+    //! The Managed variant. Functions that allocate do not need an allocator
+    //! parameter as the allocator is stored within this structure.
+    //!
+    //! Best used when this is just a local variable rather than a struct
+    //! member alongside other allocating data structures.
+    //!
+    //! Otherwise see the `Unmanaged` variant.
+
     unmanaged: Unmanaged = .{},
     allocator: Allocator,
 
@@ -308,10 +438,12 @@ pub const Managed = struct {
         self.unmanaged.buffer_lock.unlock();
     }
 
-    // Note: this is just to satisfy the standard allocator interface, you
-    // should verify that the consumer of it only allocates in a way compatible
-    // with this: i.e. owners of allocations should still call unlockBuffer
-    // when they are done with allocations
+    /// Creates a `std.mem.Allocator` that will use the underlying buffer for allocating.
+    ///
+    /// Note: This is just to satisfy the standard allocator interface, you
+    /// should verify that the consumer of it only allocates in a way compatible
+    /// with this: i.e. owners of allocations should still call `unlockBuffer`
+    /// when they are done with allocations
     pub fn asUncheckedAllocator(self: *Managed) Allocator {
         const ops = struct {
             pub fn alloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
