@@ -34,7 +34,7 @@ pub const Unmanaged = struct {
         alignment: ?u32,
         len: usize,
     ) Allocator.Error![]T {
-        const result = self.runtimeAlignedAllocTemporary(allocator, T, alignment, len);
+        const result = try self.runtimeAlignedAllocTemporary(allocator, T, alignment, len);
         self.lockBuffer();
         return result;
     }
@@ -49,7 +49,7 @@ pub const Unmanaged = struct {
         comptime alignment: ?u32,
         len: usize,
     ) Allocator.Error![]align(alignment orelse @alignOf(T)) T {
-        const result = self.alignedAllocTemporary(allocator, T, alignment, len);
+        const result = try self.alignedAllocTemporary(allocator, T, alignment, len);
         self.lockBuffer();
         return result;
     }
@@ -61,25 +61,25 @@ pub const Unmanaged = struct {
     }
 
     pub fn allocSentinel(self: *@This(), allocator: Allocator, comptime T: type, len: usize, comptime sentinel: T) Allocator.Error![:sentinel]T {
-        const result = self.allocSentinelTemporary(allocator, T, len, sentinel);
+        const result = try self.allocSentinelTemporary(allocator, T, len, sentinel);
         self.lockBuffer();
         return result;
     }
 
     pub fn create(self: *@This(), allocator: Allocator, comptime T: type) Allocator.Error!*T {
-        const result = self.createTemporary(allocator, T);
+        const result = try self.createTemporary(allocator, T);
         self.lockBuffer();
         return result;
     }
 
     pub fn dupe(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) Allocator.Error![]T {
-        const result = self.dupeTemporary(allocator, T, src);
+        const result = try self.dupeTemporary(allocator, T, src);
         self.lockBuffer();
         return result;
     }
 
     pub fn dupeZ(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) ![:0]T {
-        const result = self.dupeZTemporary(allocator, T, src);
+        const result = try self.dupeZTemporary(allocator, T, src);
         self.lockBuffer();
         return result;
     }
