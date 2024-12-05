@@ -78,7 +78,7 @@ pub const Unmanaged = struct {
         return result;
     }
 
-    pub fn dupeZ(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) ![:0]T {
+    pub fn dupeZ(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) Allocator.Error![:0]T {
         const result = try self.dupeZTemporary(allocator, T, src);
         self.lockBuffer();
         return result;
@@ -143,7 +143,7 @@ pub const Unmanaged = struct {
         return dest;
     }
 
-    pub fn dupeZTemporary(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) ![:0]T {
+    pub fn dupeZTemporary(self: *@This(), allocator: Allocator, comptime T: type, src: []const T) Allocator.Error![:0]T {
         const new_buf = try self.allocTemporary(allocator, T, src.len + 1);
         @memcpy(new_buf[0..src.len], src);
         new_buf[src.len] = 0;
@@ -385,7 +385,7 @@ pub const Managed = struct {
         return self.unmanaged.dupe(self.allocator, T, src);
     }
 
-    pub fn dupeZ(self: *@This(), comptime T: type, src: []const T) ![:0]T {
+    pub fn dupeZ(self: *@This(), comptime T: type, src: []const T) Allocator.Error![:0]T {
         return self.unmanaged.dupeZ(self.allocator, T, src);
     }
 
@@ -424,7 +424,7 @@ pub const Managed = struct {
         return self.unmanaged.dupeTemporary(self.allocator, T, src);
     }
 
-    pub fn dupeZTemporary(self: *@This(), comptime T: type, src: []const T) ![:0]T {
+    pub fn dupeZTemporary(self: *@This(), comptime T: type, src: []const T) Allocator.Error![:0]T {
         return self.unmanaged.dupeZTemporary(self.allocator, T, src);
     }
 
